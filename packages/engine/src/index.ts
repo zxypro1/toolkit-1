@@ -362,7 +362,11 @@ class Engine {
         await this.doOss(logPath);
       } else {
         this.recordContext(item, { status, error, process_time });
-        this.outputErrorLog(error as Error);
+        if (error instanceof Error) {
+          this.outputErrorLog(error as Error);
+        } else {
+          this.outputErrorLog(new Error(error.stderr as string));
+        }
         await this.doOss(logPath);
         throw error;
       }
@@ -408,13 +412,47 @@ class Engine {
       debug(`plugin context: ${stringify(newContext)}`);
       try {
         return pluginItem.type === 'run'
-          ? await app.run(newInputs, newContext, this.logger)
-          : await app.postRun(newInputs, newContext, this.logger);
+          ? await this.doPluginRun(app, newInputs, newContext, this.logger)
+          : await this.doPluginRun(app, newInputs, newContext, this.logger, true);
       } catch (err) {
         const error = err as Error;
         execDaemon('report.js', { type: EReportType.exception, userAgent: getUserAgent(), plugin: pluginItem.info, message: error.message });
         throw error;
       }
+    }
+  }
+  private async doPluginRun(app: any, inputs: any, context: any, logger: EngineLogger, postRun: boolean = false) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    
+    const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+    process.stdout.write = (chunk: any) => {
+      stdout.push(chunk.toString());
+      return true;
+    };
+    
+    process.stderr.write = (chunk: any) => {
+      stderr.push(chunk.toString()); 
+      return true;
+    };
+    try {
+      if (postRun) {
+        return await app.postRun(inputs, context, logger);
+      } else {
+        return await app.run(inputs, context, logger);
+      }
+    } catch (err: any) {
+      return {
+        stdout: stdout.join(''),
+        stderr: stderr.join(''),
+        message: err.message
+      };
+    } finally {
+      // 还原原始写入方法
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
     }
   }
   private parseEnv(item: IRunOptions) {
@@ -513,7 +551,10 @@ class Engine {
       cp.on('exit', (code: number) => {
         code === 0 || this.record.status === STEP_STATUS.CANCEL
           ? resolve({})
-          : reject(new Error(Buffer.concat(stderr).toString()));
+          : reject({
+            stderr: Buffer.concat(stderr as any).toString(),
+            stdout: Buffer.concat(stdout as any).toString(),
+          });
       });
     });
   }
