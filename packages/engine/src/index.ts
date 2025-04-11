@@ -4,7 +4,7 @@ import { command } from 'execa';
 import * as path from 'path';
 import os from 'os';
 import { IStepOptions, IRunOptions, IPluginOptions, IRecord, IStatus, IEngineOptions, IContext, ILogConfig, STEP_STATUS, ISteps, STEP_IF, EReportType } from './types';
-import { parsePlugin, getProcessTime, getDefaultInitLog, getLogPath, getPluginRequirePath, stringify, getUserAgent } from './utils';
+import { parsePlugin, getProcessTime, getDefaultInitLog, getLogPath, getPluginRequirePath, stringify, getUserAgent, TAG_MESSAGE } from './utils';
 import { INIT_STEP_COUNT, INIT_STEP_NAME, COMPLETED_STEP_COUNT, DEFAULT_COMPLETED_LOG, SERVERLESS_CD_KEY, SERVERLESS_CD_VALUE } from './constants';
 import execDaemon from './exec-daemon';
 import { filter, join } from 'lodash';
@@ -45,6 +45,7 @@ class Engine {
     const startTime = Date.now();
     const filePath = getLogPath(INIT_STEP_COUNT);
     this.logger = this.getLogger(filePath);
+    this.logger.info(TAG_MESSAGE.INIT_START);
     this.logger.info(getDefaultInitLog());
     try {
       const res = await events?.onInit?.(this.context, this.logger);
@@ -60,6 +61,7 @@ class Engine {
       // 优先读取 doInit 返回的 steps 数据，其次 行参里的 steps 数据
       const steps = await parsePlugin(res?.steps || this.options.steps, this);
       await this.doOss(filePath);
+      this.logger.info(TAG_MESSAGE.INIT_SUCCESS);
       return { ...res, steps };
     } catch (error) {
       debug(`onInit error: ${error}`);
@@ -76,6 +78,7 @@ class Engine {
       this.context.error = error as Error;
       await this.doOss(filePath);
       const steps = await parsePlugin(this.options.steps as IStepOptions[], this);
+      this.logger.info(TAG_MESSAGE.INIT_FAIL);
       return { steps };
     }
   }
@@ -297,6 +300,7 @@ class Engine {
     };
   }
   private async doCompleted() {
+    this.logger.info(TAG_MESSAGE.COMPLETED_START);
     this.context.completed = true;
     const filePath = getLogPath(COMPLETED_STEP_COUNT);
     this.logger = this.getLogger(filePath);
@@ -307,9 +311,11 @@ class Engine {
         await events?.onCompleted?.(this.context, this.logger);
       } catch (error) {
         this.outputErrorLog(error as Error);
+        this.logger.info(TAG_MESSAGE.COMPLETED_FAIL);
       }
     }
     await this.doOss(filePath);
+    this.logger.info(TAG_MESSAGE.COMPLETED_SUCCESS);
   }
   private async handleSrc(item: IStepOptions) {
     try {
@@ -368,6 +374,10 @@ class Engine {
           this.outputErrorLog(new Error(error.stderr as string));
         }
         await this.doOss(logPath);
+        const runItem = item as IRunOptions;
+        const pluginItem = item as IPluginOptions;
+        if (runItem.run) this.logger.info(TAG_MESSAGE.RUN_FAIL(item.name, item.id, runItem.run));
+        else if (pluginItem.plugin) this.logger.info(TAG_MESSAGE.PLUGIN_FAIL(item.name, item.id, pluginItem.plugin));
         throw error;
       }
     }
@@ -391,13 +401,16 @@ class Engine {
       execPath = path.isAbsolute(execPath) ? execPath : path.join(this.context.cwd, execPath);
       this.logName(item);
       runItem.run = this.doArtTemplateCompile(runItem.run);
+      this.logger.info(TAG_MESSAGE.RUN_START(runItem.name, runItem.id, runItem.run));
       const cp = command(runItem.run, { cwd: execPath, env: this.parseEnv(runItem), shell: true });
       this.childProcess.push(cp);
       const res = await this.onFinish(cp, runItem.stepCount as string);
+      this.logger.info(TAG_MESSAGE.RUN_SUCCESS(runItem.name, runItem.id, runItem.run));
       return res;
     }
     // plugin
     if (pluginItem.plugin) {
+      this.logger.info(TAG_MESSAGE.PLUGIN_START(pluginItem.name, pluginItem.id, pluginItem.plugin));
       const newEnv = this.parseEnv(runItem);
       for (const key in newEnv) {
         process.env[key] = newEnv[key];
@@ -411,9 +424,11 @@ class Engine {
       debug(`plugin inputs: ${stringify(newInputs)}`);
       debug(`plugin context: ${stringify(newContext)}`);
       try {
-        return pluginItem.type === 'run'
+        const res = pluginItem.type === 'run'
           ? await this.doPluginRun(app, newInputs, newContext, this.logger)
           : await this.doPluginRun(app, newInputs, newContext, this.logger, true);
+        this.logger.info(TAG_MESSAGE.PLUGIN_SUCCESS(pluginItem.name, pluginItem.id, pluginItem.plugin));
+        return res;
       } catch (err) {
         const error = err as Error;
         execDaemon('report.js', { type: EReportType.exception, userAgent: getUserAgent(), plugin: pluginItem.info, message: error.message });
@@ -444,7 +459,7 @@ class Engine {
         return await app.run(inputs, context, logger);
       }
     } catch (err: any) {
-      return {
+      throw {
         stdout: stdout.join(''),
         stderr: stderr.join(''),
         message: err.message

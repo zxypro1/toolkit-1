@@ -111,3 +111,18 @@ export const stringify = (value: any) => {
     return flatted.stringify(value);
   }
 };
+
+export const TAG_MESSAGE = {
+  RUN_START: (name: string | undefined, id: string | undefined, run: string | undefined) => `##[group]run:${name}:${id}:${run}`,
+  RUN_FAIL: (name: string | undefined, id: string | undefined, run: string | undefined) => `##[groupend]run:${name}:${id}:${run}:fail`,
+  RUN_SUCCESS: (name: string | undefined, id: string | undefined, run: string | undefined) => `##[groupend]run:${name}:${id}:${run}:success`,
+  PLUGIN_START: (name: string | undefined, id: string | undefined, run: string | undefined) => `##[group]plugin:${name}:${id}:${run}`,
+  PLUGIN_FAIL: (name: string | undefined, id: string | undefined, run: string | undefined) => `##[groupend]plugin:${name}:${id}:${run}:fail`,
+  PLUGIN_SUCCESS: (name: string | undefined, id: string | undefined, run: string | undefined) => `##[groupend]plugin:${name}:${id}:${run}:success`,
+  INIT_START: '##[group]init',
+  INIT_FAIL: '##[groupend]init:fail',
+  INIT_SUCCESS: '##[groupend]init:success',
+  COMPLETED_START: '##[group]completed',
+  COMPLETED_FAIL: '##[groupend]completed:fail',
+  COMPLETED_SUCCESS: '##[groupend]completed:success',
+};
