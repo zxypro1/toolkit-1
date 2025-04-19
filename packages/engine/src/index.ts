@@ -468,6 +468,9 @@ class Engine {
       // 还原原始写入方法
       process.stdout.write = originalStdoutWrite;
       process.stderr.write = originalStderrWrite;
+      // 将内容写回到process
+      process.stdout.write(stdout.join(''));
+      process.stderr.write(stderr.join(''));
     }
   }
   private parseEnv(item: IRunOptions) {
