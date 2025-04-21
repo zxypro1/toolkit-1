@@ -424,19 +424,11 @@ class Engine {
       debug(`plugin inputs: ${stringify(newInputs)}`);
       debug(`plugin context: ${stringify(newContext)}`);
       try {
-        if (this.context.inputs?.context?.isDipper) {
-          const res = pluginItem.type === 'run'
-            ? await this.doPluginRun(app, newInputs, newContext, this.logger)
-            : await this.doPluginRun(app, newInputs, newContext, this.logger, true);
-          this.logger.info(TAG_MESSAGE.PLUGIN_SUCCESS(pluginItem.name, pluginItem.id, pluginItem.plugin));
-          return res;
-        } else {
-          const res = pluginItem.type === 'run'
-            ? await app.run(newInputs, newContext, this.logger)
-            : await app.postRun(newInputs, newContext, this.logger);
-          this.logger.info(TAG_MESSAGE.PLUGIN_SUCCESS(pluginItem.name, pluginItem.id, pluginItem.plugin));
-          return res;
-        }
+        const res = pluginItem.type === 'run'
+          ? await this.doPluginRun(app, newInputs, newContext, this.logger)
+          : await this.doPluginRun(app, newInputs, newContext, this.logger, true);
+        this.logger.info(TAG_MESSAGE.PLUGIN_SUCCESS(pluginItem.name, pluginItem.id, pluginItem.plugin));
+        return res;
       } catch (err) {
         const error = err as Error;
         execDaemon('report.js', { type: EReportType.exception, userAgent: getUserAgent(), plugin: pluginItem.info, message: error.message });
@@ -577,10 +569,10 @@ class Engine {
       cp.on('exit', (code: number) => {
         code === 0 || this.record.status === STEP_STATUS.CANCEL
           ? resolve({})
-          : reject(this.context.inputs?.context?.isDipper ? {
+          : reject({
             stderr: Buffer.concat(stderr as any).toString(),
             stdout: Buffer.concat(stdout as any).toString(),
-          } : new Error(Buffer.concat(stderr).toString()));
+          });
       });
     });
   }
