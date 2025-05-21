@@ -16,6 +16,15 @@ test('某一步执行失败，错误信息记录在context.error', async () => {
   expect(res.error).toBeInstanceOf(Error);
 });
 
+test('路径错误，正常抛出', async () => {
+  const steps = [
+    { run: 'npm install', id: 'xhello', "working-directory": './xsadads' },
+  ] as IStepOptions[];
+  const engine = new Engine({ steps, logConfig: { logPrefix } });
+  const res: IContext | undefined = await engine.start();
+  expect(res.error).toBeInstanceOf(Error);
+});
+
 test('某一步执行失败，后续步骤执行状态为skip', async () => {
   const steps = [
     { run: 'echo "hello"', id: 'xhello' },

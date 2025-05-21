@@ -8,6 +8,7 @@ import { parsePlugin, getProcessTime, getDefaultInitLog, getLogPath, getPluginRe
 import { INIT_STEP_COUNT, INIT_STEP_NAME, COMPLETED_STEP_COUNT, DEFAULT_COMPLETED_LOG, SERVERLESS_CD_KEY, SERVERLESS_CD_VALUE } from './constants';
 import execDaemon from './exec-daemon';
 import { filter, join } from 'lodash';
+import fs from 'fs';
 
 export { IStepOptions, IContext } from './types';
 
@@ -382,6 +383,14 @@ class Engine {
       }
     }
   }
+  private validateWorkingDirectory(path: string) {
+    if (!fs.existsSync(path)) {
+      throw new Error(`Invalid working directory: ${path}`);
+    }
+    if (!fs.statSync(path).isDirectory()) {
+      throw new Error(`Path is not a directory: ${path}`);
+    }
+  }
   private outputErrorLog(error: Error) {
     const logConfig = this.options.logConfig as ILogConfig;
     const { customLogger } = logConfig;
@@ -398,6 +407,9 @@ class Engine {
     if (runItem.run) {
       debug(`run: ${runItem.run}`);
       let execPath = runItem['working-directory'] || this.context.cwd;
+      if (execPath) {
+        this.validateWorkingDirectory(execPath);
+      }
       execPath = path.isAbsolute(execPath) ? execPath : path.join(this.context.cwd, execPath);
       this.logName(item);
       runItem.run = this.doArtTemplateCompile(runItem.run);
