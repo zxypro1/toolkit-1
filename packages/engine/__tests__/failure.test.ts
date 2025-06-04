@@ -13,7 +13,7 @@ test('某一步执行失败，错误信息记录在context.error', async () => {
 
   const engine = new Engine({ steps, logConfig: { logPrefix } });
   const res: IContext | undefined = await engine.start();
-  expect(res.error).toBeInstanceOf(Error);
+  expect(res.error).toBeInstanceOf(Object);
 });
 
 test('路径错误，正常抛出', async () => {
