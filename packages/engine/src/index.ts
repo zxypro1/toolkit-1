@@ -407,10 +407,10 @@ class Engine {
     if (runItem.run) {
       debug(`run: ${runItem.run}`);
       let execPath = runItem['working-directory'] || this.context.cwd;
+      execPath = path.isAbsolute(execPath) ? execPath : path.join(this.context.cwd, execPath);
       if (execPath) {
         this.validateWorkingDirectory(execPath);
       }
-      execPath = path.isAbsolute(execPath) ? execPath : path.join(this.context.cwd, execPath);
       this.logName(item);
       runItem.run = this.doArtTemplateCompile(runItem.run);
       this.logger.info(TAG_MESSAGE.RUN_START(runItem.name, runItem.id, runItem.run));
