@@ -1,4 +1,5 @@
-import Engine, { IStepOptions, IContext } from '../lib';
+// import Engine, { IStepOptions, IContext } from '../lib';
+import Engine, { IStepOptions, IContext } from '../src';
 import { lodash } from '@serverless-cd/core';
 import * as path from 'path';
 const { get, map } = lodash;
@@ -258,7 +259,7 @@ test('inputs测试 env', async () => {
   ]);
 });
 
-test.only('测试plugin安装逻辑', async () => {
+test('测试plugin安装逻辑', async () => {
   const steps = [
     { run: 'echo "hello"', id: 'xhello' },
     { plugin: '@serverless-cd/ding-talk', id: 'ding' },
@@ -277,4 +278,108 @@ test.only('测试plugin安装逻辑', async () => {
     { status: 'success', name: 'Run echo "hello"' },
     { status: 'failure', name: 'Run @serverless-cd/ding-talk' },
   ]);
+});
+
+// 新增性能统计测试
+test('性能统计功能测试', async () => {
+  const steps = [
+    { run: 'echo "step1"' },
+    { run: 'sleep 1 && echo "step2"' }, // 添加短暂延迟
+    { run: 'echo "step3"' },
+  ] as IStepOptions[];
+
+  const engine = new Engine({
+    steps,
+    logConfig: { logPrefix }
+  });
+
+  const res: IContext | undefined = await engine.start();
+
+  // 验证任务执行成功
+  expect(res?.status).toBe('success');
+
+  // 验证性能数据存在
+  expect(res?.performance).toBeDefined();
+
+  // 验证初始化耗时存在
+  expect(res?.performance?.initTime).toBeDefined();
+  expect(res?.performance?.initTime).toBeGreaterThanOrEqual(0);
+
+  // 验证总耗时存在
+  expect(res?.performance?.totalTime).toBeDefined();
+  expect(res?.performance?.totalTime).toBeGreaterThanOrEqual(0);
+
+  // 验证步骤耗时存在
+  expect(res?.performance?.stepTimes).toBeDefined();
+  expect(Object.keys(res?.performance?.stepTimes || {})).toHaveLength(steps.length);
+
+  // 验证任务状态和步骤数
+  expect(res?.performance?.taskStatus).toBe('success');
+
+  // 验证除初始化外每个步骤都有耗时记录
+  for (const step of res?.steps || []) {
+    if (step.stepCount&&step.stepCount!=='0') {
+      expect(res?.performance?.stepTimes?.[step.stepCount]).toBeDefined();
+      expect(res?.performance?.stepTimes?.[step.stepCount]).toBeGreaterThanOrEqual(0);
+    }
+  }
+});
+
+// 测试带超时的性能统计
+test('带超时的性能统计功能测试', async () => {
+  const steps = [
+    { run: 'echo "step1"' },
+    { run: 'sleep 0.1 && echo "step2"' },
+  ] as IStepOptions[];
+
+  const engine = new Engine({
+    steps,
+    logConfig: { logPrefix },
+    stepTimeout: 3
+  });
+
+  const res: IContext | undefined = await engine.start();
+
+  // 验证任务执行成功
+  expect(res?.status).toBe('success');
+  // 验证性能数据存在
+  expect(res?.performance).toBeDefined();
+  // 验证超时配置被正确传递
+  // 这部分验证需要查看Engine内部实现
+});
+
+// 测试失败情况下的性能统计
+test('失败情况下的性能统计功能测试', async () => {
+  const steps = [
+    { run: 'echo "step1"' },
+    { run: 'exit 1' }, // 故意失败的步骤
+    { run: 'echo "step3"' },
+  ] as IStepOptions[];
+
+  const engine = new Engine({
+    steps,
+    logConfig: { logPrefix }
+  });
+
+  const res: IContext | undefined = await engine.start();
+
+  // 验证任务执行失败
+  expect(res?.status).toBe('failure');
+
+  // 验证性能数据仍然存在
+  expect(res?.performance).toBeDefined();
+
+  // 验证初始化耗时存在
+  expect(res?.performance?.initTime).toBeDefined();
+  expect(res?.performance?.initTime).toBeGreaterThanOrEqual(0);
+
+  // 验证总耗时存在
+  expect(res?.performance?.totalTime).toBeDefined();
+  expect(res?.performance?.totalTime).toBeGreaterThanOrEqual(0);
+
+  // 验证步骤耗时存在（即使任务失败也应该记录）
+  expect(res?.performance?.stepTimes).toBeDefined();
+
+  // 验证任务状态
+  expect(res?.performance?.taskStatus).toBe('failure');
 });

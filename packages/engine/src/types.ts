@@ -1,4 +1,13 @@
 import { IOssConfig, LoggerLevel } from '@serverless-cd/core';
+
+// 新增超时异常类型
+export class TimeoutError extends Error {
+  constructor(message: string, public step?: IStepOptions) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
 export interface IEngineOptions {
   steps?: IStepOptions[];
   inputs?: Record<string, any>;
@@ -6,6 +15,9 @@ export interface IEngineOptions {
   cwd?: string; // 当前工作目录
   events?: IEvent;
   unsetEnvs?: string[]; // 需要清除的环境变量
+  stepTimeout?: number; // 默认步骤超时时间(秒)
+  timeout?: number; // 全局超时时间(秒)
+  reportUrl?: string; // 耗时数据上报URL
 }
 
 interface IEvent {
@@ -22,6 +34,7 @@ export interface ILogConfig {
   customLogger?: any;
   eol?: string;
 }
+
 export interface IRunOptions {
   run: string;
   stepCount?: string;
@@ -31,6 +44,7 @@ export interface IRunOptions {
   env?: Record<string, any>;
   'continue-on-error'?: boolean;
   'working-directory'?: string;
+  timeout?: number; // 步骤超时时间(秒)
 }
 
 export interface IPluginOptions {
@@ -44,6 +58,7 @@ export interface IPluginOptions {
   inputs?: Record<string, any>;
   type?: 'run' | 'postRun'; //内部处理 用于区分是run还是postRun
   info?: string; // name@version
+  timeout?: number; // 步骤超时时间(秒)
 }
 
 export type IStepOptions = IRunOptions | IPluginOptions;
@@ -62,6 +77,7 @@ export enum STEP_STATUS_BASE {
   RUNNING = 'running',
   PENING = 'pending',
   ERROR_WITH_CONTINUE = 'error-with-continue',
+  TIMEOUT_FAILURE = 'timeout-failure', // 新增超时失败状态
 }
 
 export type IStatus = `${STEP_STATUS_BASE}`;
@@ -89,6 +105,23 @@ export interface IRecord {
   isInit: boolean; // 是否将初始化的数据放到context.steps中
 }
 
+// 性能数据接口
+export interface IPerformanceData {
+  initTime?: number; // 初始化耗时(秒)
+  totalTime?: number; // 总耗时(秒)
+  stepTimes?: Record<string, number>; // 每个步骤的耗时(秒)
+  taskStatus?: IStatus; // 任务状态
+  stepLength?: number; // 步骤总数
+}
+
+// 上报数据接口
+export interface IReportData {
+  taskId: string; // 任务ID
+  performance: IPerformanceData; // 性能数据
+  timestamp: number; // 时间戳
+  userAgent: string; // 用户代理
+}
+
 export interface IContext {
   cwd: string; // 当前工作目录
   stepCount: string; // 记录当前执行的step
@@ -98,10 +131,11 @@ export interface IContext {
   completed: boolean; // 记录task是否执行完成
   inputs: Record<string, any>; // 记录inputs的输入(魔法变量)
   error: Error; // 记录step的错误信息
+  performance?: IPerformanceData; // 性能数据
 }
-
 
 export enum EReportType {
   command = 'command',
-  exception = 'exception'
+  exception = 'exception',
+  performance = 'performance', // 新增性能数据上报类型
 }
