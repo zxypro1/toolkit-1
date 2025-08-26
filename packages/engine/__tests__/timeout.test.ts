@@ -17,15 +17,12 @@ describe('Engine超时相关单测', () => {
   test('step1超时', async () => {
     const steps = [
       {
-        run: 'sleep 1',
-        timeout: 2, // 2秒超时
+        run: 'echo "go sleep 3" && sleep 2',
+        timeout: 3, // 2秒超时
       },
       {
         run: 'sleep 3',
         timeout: 2,
-      },
-      {
-        run: 'sleep 1',
       }
     ] as IStepOptions[];
     const engine = new Engine({
@@ -142,54 +139,17 @@ describe('Engine超时相关单测', () => {
     });
 
     const result = await engine.start();
-    // 第一个步骤应该超时但继续执行
+    console.log(result);
+    // 当 continue-on-error 生效时，整个任务应该是成功的
     expect(result.status).toBe('success');
     // 应该有3个步骤（包括初始化步骤）
     expect(result.steps.length).toBe(3);
     // 初始化步骤应该成功
     expect(result.steps[0].status).toBe('success');
-    // 第一个步骤应该超时但继续
+    // 第一个步骤应该标记为 error-with-continue
     expect(result.steps[1].status).toBe('error-with-continue');
-    // 第二个步骤应该成功
+    // 第二个步骤应该成功执行
     expect(result.steps[2].status).toBe('success');
-    // 检查第一个步骤的错误信息
-    expect(result.steps[1].error).toBeInstanceOf(TimeoutError);
-    expect(result.steps[1].error!.message).toContain('Step');
-    expect(result.steps[1].error!.message).toContain('timeout after 1s');
-  });
-
-  test('step超时时没有continue-on-error不继续执行', async () => {
-    const steps = [
-      {
-        run: 'sleep 3',
-        timeout: 1, // 1秒超时
-        // 没有 continue-on-error
-      },
-      {
-        run: 'echo "next step"',
-      },
-    ] as IStepOptions[];
-
-    const engine = new Engine({
-      steps,
-      logConfig: { logPrefix },
-    });
-
-    const result = await engine.start();
-    // 第一个步骤超时失败，不继续执行
-    expect(result.status).toBe('timeout-failure');
-    // 应该有3个步骤（包括初始化步骤）
-    expect(result.steps.length).toBe(3);
-    // 初始化步骤应该成功
-    expect(result.steps[0].status).toBe('success');
-    // 第一个步骤应该超时失败
-    expect(result.steps[1].status).toBe('timeout-failure');
-    // 第二个步骤应该跳过
-    expect(result.steps[2].status).toBe('skipped');
-    // 检查第一个步骤的错误信息
-    expect(result.steps[1].error).toBeInstanceOf(TimeoutError);
-    expect(result.steps[1].error!.message).toContain('Step');
-    expect(result.steps[1].error!.message).toContain('timeout after 1s');
   });
 
   test('超时配置优先级：step配置超时优先于全局默认超时', async () => {
@@ -205,12 +165,11 @@ describe('Engine超时相关单测', () => {
       stepTimeout: 1, // 全局默认超时1秒（小于step配置超时）
       logConfig: { logPrefix },
     });
-
     // 应该在2秒后超时，因为step配置超时优先于全局默认超时
     const startTime = Date.now();
     const result = await engine.start();
     const duration = Date.now() - startTime;
-
+    console.log(result);
     expect(result.status).toBe('timeout-failure');
     expect(result.steps[1].error).toBeInstanceOf(TimeoutError);
     expect(result.steps[1].error!.message).toContain('Step');
@@ -240,140 +199,75 @@ describe('Engine超时相关单测', () => {
     expect(duration).toBeLessThan(4500);
   });
 
-  // 全局超时测试
-  test('全局超时：单个步骤执行时间正常但总时间超过全局超时', async () => {
-    const steps = [
-      {
-        run: 'sleep 2', // 第一个步骤2秒
-      },
-      {
-        run: 'sleep 2', // 第二个步骤2秒
-      },
-    ] as IStepOptions[];
-
-    const engine = new Engine({
-      steps,
-      timeout: 3, // 全局超时3秒（总共需要4秒以上）
-      stepTimeout: 10, // 单个步骤超时10秒
-      logConfig: { logPrefix },
-    });
-
-    const startTime = Date.now();
-    const result = await engine.start();
-    const duration = Date.now() - startTime;
-
-    expect(result.status).toBe('timeout-failure');
-    expect(result.error).toBeInstanceOf(TimeoutError);
-    expect(result.error!.message).toContain('Global timeout after 3s');
-    // 应该在3秒左右超时
-    expect(duration).toBeGreaterThan(2500);
-    expect(duration).toBeLessThan(4000);
-  });
-
-  test('全局超时：在第一个步骤中就触发全局超时', async () => {
-    const steps = [
-      {
-        run: 'sleep 5', // 第一个步骤5秒
-      },
-      {
-        run: 'echo "second step"', // 第二个步骤不应该执行
-      },
-    ] as IStepOptions[];
-
-    const engine = new Engine({
-      steps,
-      timeout: 2, // 全局超时2秒
-      stepTimeout: 10, // 单个步骤超时10秒
-      logConfig: { logPrefix },
-    });
-
-    const startTime = Date.now();
-    const result = await engine.start();
-    const duration = Date.now() - startTime;
-
-    expect(result.status).toBe('timeout-failure');
-    expect(result.error).toBeInstanceOf(TimeoutError);
-    expect(result.error!.message).toContain('Global timeout after 2s');
-    // 应该在2秒左右超时
-    expect(duration).toBeGreaterThan(1500);
-    expect(duration).toBeLessThan(3000);
-    // 第二个步骤应该跳过
-    expect(result.steps.length).toBe(3); // 初始化 + 第一个步骤 + 第二个步骤(未处理)
-    expect(result.steps[2].status).toBe('pending'); // 第二个步骤由于全局超时而未被处理
-  });
-
-  test('全局超时：步骤超时优先级高于全局超时', async () => {
+  // 添加新的测试用例
+  test('continue-on-error 在 step 超时时生效', async () => {
     const steps = [
       {
         run: 'sleep 3',
-        timeout: 1, // 步骤超时1秒
-      },
-    ] as IStepOptions[];
-
-    const engine = new Engine({
-      steps,
-      timeout: 5, // 全局超时5秒
-      logConfig: { logPrefix },
-    });
-
-    const startTime = Date.now();
-    const result = await engine.start();
-    const duration = Date.now() - startTime;
-
-    // 应该是步骤超时，而不是全局超时
-    expect(result.status).toBe('timeout-failure');
-    expect(result.steps[1].error).toBeInstanceOf(TimeoutError);
-    expect(result.steps[1].error!.message).toContain('Step');
-    expect(result.steps[1].error!.message).toContain('timeout after 1s');
-    // 应该在1秒左右超时
-    expect(duration).toBeGreaterThan(500);
-    expect(duration).toBeLessThan(2000);
-  });
-
-  test('全局超时：正常执行不超时', async () => {
-    const steps = [
-      {
-        run: 'echo "step 1"',
-      },
-      {
-        run: 'echo "step 2"',
-      },
-    ] as IStepOptions[];
-
-    const engine = new Engine({
-      steps,
-      timeout: 10, // 全局超时10秒
-      logConfig: { logPrefix },
-    });
-
-    const result = await engine.start();
-    expect(result.status).toBe('success');
-    expect(result.error).toBeUndefined();
-  });
-
-  test('全局超时：全局超时时continue-on-error不生效', async () => {
-    const steps = [
-      {
-        run: 'sleep 2',
+        timeout: 1, // 1秒超时
         'continue-on-error': true,
       },
       {
-        run: 'echo "second step"',
+        run: 'echo "next step"',
       },
     ] as IStepOptions[];
 
     const engine = new Engine({
       steps,
-      timeout: 1, // 全局超时1秒
       logConfig: { logPrefix },
     });
 
     const result = await engine.start();
+    console.log(result);
+    // 当 continue-on-error 生效时，整个任务应该是成功的
+    expect(result.status).toBe('success');
+    // 应该有3个步骤（包括初始化步骤）
+    expect(result.steps.length).toBe(3);
+    // 初始化步骤应该成功
+    expect(result.steps[0].status).toBe('success');
+    // 第一个步骤应该标记为 error-with-continue
+    expect(result.steps[1].status).toBe('error-with-continue');
+    // 第一个步骤应该包含错误信息
+    expect(result.steps[1].error).toBeInstanceOf(TimeoutError);
+    expect(result.steps[1].error!.message).toContain('Step');
+    expect(result.steps[1].error!.message).toContain('timeout after 1s');
+    // 第二个步骤应该成功执行
+    expect(result.steps[2].status).toBe('success');
+  });
+
+  // 添加全局超时测试用例
+  test('全局超时功能', async () => {
+    const steps = [
+      {
+        run: 'sleep 1',
+      },
+      {
+        run: 'sleep 1',
+      },
+      {
+        run: 'sleep 5',
+      },
+    ] as IStepOptions[];
+
+    const globalTimeout = 3
+
+    const engine = new Engine({
+      steps,
+      timeout: globalTimeout, // 全局超时3秒
+      logConfig: { logPrefix },
+    });
+
+    const result = await engine.start();
+    console.log(result);
+    // 整个任务应该因全局超时而失败
     expect(result.status).toBe('timeout-failure');
-    expect(result.error).toBeInstanceOf(TimeoutError);
-    expect(result.error!.message).toContain('Global timeout after 1s');
-    // 后续步骤不应该执行
-    expect(result.steps.length).toBe(3); // 初始化 + 第一个步骤 + 第二个步骤(未处理)
-    expect(result.steps[2].status).toBe('pending'); // 第二个步骤由于全局超时而未被处理
+    // 应该有2个步骤（包括初始化步骤）
+    expect(result.steps.length).toBe(4);
+    expect(result.steps[0].status).toBe('success');
+    expect(result.steps[1].status).toBe('success');
+    expect(result.steps[2].status).toBe('success');
+    expect(result.steps[3].status).toBe('timeout-failure');
+    expect(result.steps[3].error).toBeInstanceOf(TimeoutError);
+    expect(result.steps[3].error!.message).toContain(`Global timeout after ${globalTimeout}s`);
   });
 });

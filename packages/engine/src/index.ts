@@ -22,6 +22,7 @@ class Engine {
   private logger: any;
   private stepTimeoutId: NodeJS.Timeout | null = null; // 步骤超时定时器
   private globalTimeoutId: NodeJS.Timeout | null = null; // 全局超时定时器
+  private globalTimeoutPromise: Promise<never> | null = null; // 全局超时Promise
   private startTime: number = 0; // 任务开始时间
   private initStartTime: number = 0; // 初始化开始时间
   constructor(private options: IEngineOptions) {
@@ -29,14 +30,18 @@ class Engine {
     debug(`engine options: ${stringify(options)}`);
 
     process.env[SERVERLESS_CD_KEY] = SERVERLESS_CD_VALUE;
-    const { inputs, cwd = process.cwd(), logConfig = {} } = options;
+    const { inputs, cwd = process.cwd(), logConfig = {},stepTimeout,timeout } = options;
     this.options.logConfig = logConfig;
     // 记录上下文信息
     this.context.cwd = cwd;
     this.context.inputs = inputs as {};
+    stepTimeout && (this.context.stepTimeout = stepTimeout);
+    timeout && (this.context.timeout = timeout);
     this.context.performance = {
       stepTimes: {},
     } as IPerformanceData;
+    // 初始化全局超时
+    this.setupGlobalTimeout();
     this.doUnsetEnvs();
   }
   private async doUnsetEnvs() {
@@ -109,41 +114,37 @@ class Engine {
     }
     this.context.steps = map(steps as ISteps[], (item) => {
       item.status = STEP_STATUS.PENING;
-      item.timeout = item.timeout || this.options.stepTimeout;
+      const tmpTimeout = item.timeout || this.options.stepTimeout;
+      tmpTimeout && (item.timeout = tmpTimeout);
       return item;
     });
     return new Promise(async (resolve) => {
-      // 全局超时Promise
-      const globalTimeoutPromise = this.createGlobalTimeoutPromise();
-      
-      // 步骤执行Promise
-      const stepExecutionPromise = new Promise<IContext>(async (stepResolve) => {
-        const states: any = {
-          init: {
-            on: {
-              INIT: get(steps, '[0].stepCount'),
+      const states: any = {
+        init: {
+          on: {
+            INIT: get(steps, '[0].stepCount'),
+          },
+        },
+        final: {
+          type: 'final',
+          invoke: {
+            src: async () => {
+              // 执行终态是 error-with-continue 的时候，改为 success
+              const status =
+                this.record.status === STEP_STATUS.ERROR_WITH_CONTINUE
+                  ? STEP_STATUS.SUCCESS
+                  : this.record.status;
+              this.context.status = status;
+              await this.doCompleted();
+              if (status === STEP_STATUS.SUCCESS) {
+                this.report();
+              }
+              debug('engine end');
+              resolve(this.context);
             },
           },
-          final: {
-            type: 'final',
-            invoke: {
-              src: async () => {
-                // 执行终态是 error-with-continue 的时候，改为 success
-                const status =
-                  this.record.status === STEP_STATUS.ERROR_WITH_CONTINUE
-                    ? STEP_STATUS.SUCCESS
-                    : this.record.status;
-                this.context.status = status;
-                await this.doCompleted();
-                if (status === STEP_STATUS.SUCCESS) {
-                  this.report();
-                }
-                debug('engine end');
-                stepResolve(this.context);
-              },
-            },
-          },
-        };
+        },
+      };
 
       each(steps, (item, index) => {
         const target = steps[index + 1] ? get(steps, `[${index + 1}].stepCount`) : 'final';
@@ -202,62 +203,19 @@ class Engine {
         };
       });
 
-        const fetchMachine = createMachine({
-          predictableActionArguments: true,
-          id: 'step',
-          initial: 'init',
-          states,
-        });
-
-        const stepService = interpret(fetchMachine)
-          .onTransition((state) => {
-            this.logger?.debug(`step: ${state.value}`);
-          })
-          .start();
-        stepService.send('INIT');
+      const fetchMachine = createMachine({
+        predictableActionArguments: true,
+        id: 'step',
+        initial: 'init',
+        states,
       });
-      
-      // Promise竞赛：步骤执行 vs 全局超时
-      try {
-        const result = await Promise.race([stepExecutionPromise, globalTimeoutPromise]);
-        resolve(result);
-      } catch (error) {
-        // 如果是全局超时错误，确保设置正确的状态
-        if (error instanceof TimeoutError) {
-          this.context.status = STEP_STATUS.TIMEOUT_FAILURE;
-          this.context.error = error;
-          await this.doCompleted();
-        }
-        resolve(this.context);
-      }
-    });
-  }
-  // 创建全局超时Promise
-  private createGlobalTimeoutPromise(): Promise<never> {
-    return new Promise((_, reject) => {
-      const globalTimeout = this.options.timeout;
-      if (globalTimeout) {
-        const timeoutInMs = globalTimeout * 1000;
-        this.globalTimeoutId = setTimeout(() => {
-          const errorMsg = `Global timeout after ${globalTimeout}s`;
-          this.logger?.error(errorMsg);
-          
-          // 设置全局状态为超时失败
-          this.record.status = STEP_STATUS.TIMEOUT_FAILURE;
-          this.record.editStatusAble = false;
-          
-          // 清理定时器
-          this.clearAllTimeouts();
-          
-          // 杀死正在执行的子进程
-          each(this.childProcess, (item) => {
-            item.kill();
-          });
-          
-          reject(new TimeoutError(errorMsg));
-        }, timeoutInMs);
-      }
-      // 如果没有设置全局超时，这个Promise永远不会reject，让步骤执行正常进行
+
+      const stepService = interpret(fetchMachine)
+        .onTransition((state) => {
+          this.logger?.debug(`step: ${state.value}`);
+        })
+        .start();
+      stepService.send('INIT');
     });
   }
   private report() {
@@ -356,7 +314,8 @@ class Engine {
     each(this.childProcess, (item) => {
       item.kill();
     });
-    this.clearAllTimeouts(); // 清除所有超时定时器
+    this.clearTimeout(); // 清除超时定时器
+    this.clearGlobalTimeout(); // 清除全局超时定时器
   }
   private getFilterContext() {
     const { inputs = {} } = this.options;
@@ -391,7 +350,8 @@ class Engine {
       this.context.performance.taskStatus = this.record.status;
       this.context.performance.stepLength = this.context.steps.length;
     }
-    this.clearAllTimeouts(); // 清除所有超时定时器
+    this.clearTimeout(); // 清除超时定时器
+    this.clearGlobalTimeout();
     await this.doOss(filePath);
     this.logger.info(TAG_MESSAGE.COMPLETED_SUCCESS);
   }
@@ -402,7 +362,11 @@ class Engine {
       // 设置步骤超时定时器
       const stepTimeoutPromise = this.setupStepTimeout(item);
       const responsePromise = this.doSrc(item);
-      const response: any = await Promise.race([responsePromise, stepTimeoutPromise]);
+      const promises = [responsePromise, stepTimeoutPromise];
+      if (this.globalTimeoutPromise) {
+        promises.push(this.globalTimeoutPromise);
+      }
+      const response: any = await Promise.race(promises);
       if (this.stepTimeoutId) {
         clearTimeout(this.stepTimeoutId);
         this.stepTimeoutId = null;
@@ -441,19 +405,21 @@ class Engine {
       let status: IStatus;
       const isTimeoutError = error instanceof TimeoutError;
       if (isTimeoutError) {
-        // 超时错误也支持continue-on-error
-        status =
-          item['continue-on-error'] === true
-            ? STEP_STATUS.ERROR_WITH_CONTINUE
-            : STEP_STATUS.TIMEOUT_FAILURE;
-        // 更新全局状态
-        if (this.record.editStatusAble) {
-          // 只有超时且没有continue-on-error时才设置为TIMEOUT_FAILURE
-          if (status === STEP_STATUS.TIMEOUT_FAILURE) {
-            this.record.status = STEP_STATUS.TIMEOUT_FAILURE;
-            this.record.editStatusAble = false;
+        // 如果是超时错误，检查是否设置了 continue-on-error
+        if (item['continue-on-error'] === true) {
+          status = STEP_STATUS.ERROR_WITH_CONTINUE;
+          // 不修改全局状态，允许继续执行后续步骤
+          if (this.record.editStatusAble) {
+            this.record.status = STEP_STATUS.ERROR_WITH_CONTINUE;
           }
-          // 如果是ERROR_WITH_CONTINUE，保持当前状态或SUCCESS
+        } else {
+          // 如果没有设置 continue-on-error，设置状态为timeout-failure
+          status = STEP_STATUS.TIMEOUT_FAILURE;
+          // 更新全局状态
+          if (this.record.editStatusAble) {
+            this.record.status = STEP_STATUS.TIMEOUT_FAILURE;
+            this.record.editStatusAble = false; // 超时失败后，全局状态不可再修改
+          }
         }
       } else {
         // 非超时错误的原有逻辑
@@ -734,13 +700,23 @@ class Engine {
       this.stepTimeoutId = null;
     }
   }
-
-  // 清理所有超时定时器
-  private clearAllTimeouts() {
-    if (this.stepTimeoutId) {
-      clearTimeout(this.stepTimeoutId);
-      this.stepTimeoutId = null;
+  // 设置全局超时
+  private setupGlobalTimeout() {
+    const { timeout } = this.options;
+    if (timeout) {
+      const timeoutInMs = timeout * 1000;
+      this.globalTimeoutPromise = new Promise((_, reject) => {
+        this.globalTimeoutId = setTimeout(() => {
+          const errorMsg = `Global timeout after ${timeout}s`;
+          this.logger?.error(errorMsg);
+          this.clearTimeout();
+          reject(new TimeoutError(errorMsg));
+        }, timeoutInMs);
+      });
     }
+  }
+  // 清除全局超时
+  private clearGlobalTimeout() {
     if (this.globalTimeoutId) {
       clearTimeout(this.globalTimeoutId);
       this.globalTimeoutId = null;

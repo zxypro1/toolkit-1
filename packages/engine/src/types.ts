@@ -132,6 +132,8 @@ export interface IContext {
   inputs: Record<string, any>; // 记录inputs的输入(魔法变量)
   error: Error; // 记录step的错误信息
   performance?: IPerformanceData; // 性能数据
+  stepTimeout?: number; // 步骤超时时间(秒)
+  timeout?: number; // 全局超时时间(秒)
 }
 
 export enum EReportType {
