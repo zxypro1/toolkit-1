@@ -691,6 +691,9 @@ class Engine {
   private handleStepTimeout(item: IStepOptions, timeout: number, reject: (reason?: any) => void) {
     const errorMsg = `Step '${item.stepCount}' timeout after ${timeout}s`;
     this.logger?.error(errorMsg);
+    each(this.childProcess, (item) => {
+      item.kill();
+    });
     reject(new TimeoutError(errorMsg, item));
   }
   // 超时清理逻辑
