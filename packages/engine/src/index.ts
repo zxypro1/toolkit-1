@@ -710,6 +710,9 @@ class Engine {
           const errorMsg = `Global timeout after ${timeout}s`;
           this.logger?.error(errorMsg);
           this.clearTimeout();
+          each(this.childProcess, (item) => {
+            item.kill();
+          });
           reject(new TimeoutError(errorMsg));
         }, timeoutInMs);
       });
